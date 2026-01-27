@@ -45,7 +45,7 @@ static uint8_t              m_custom_uuid_type;
 static uint8_t              apple_key[APPLE_KEY_LENGTH];
 static uint8_t              m_apple_key_offset = 0;
 
-// Google key storage - receives 20 bytes in one write
+// Google key storage - receives 20 bytes in one write operation
 static uint8_t              google_key[GOOGLE_KEY_LENGTH];
 
 void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name)
