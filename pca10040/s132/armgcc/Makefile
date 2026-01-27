@@ -2,7 +2,10 @@ PROJECT_NAME     := ble_app_beacon_pca10040_s132
 TARGETS          := nrf52832_xxaa
 OUTPUT_DIRECTORY := _build
 
-SDK_ROOT := ../../../../../..
+SDK_ROOT ?= $(NRF_SDK_ROOT)
+ifeq ($(strip $(SDK_ROOT)),)
+$(error SDK_ROOT is not set. Set NRF_SDK_ROOT environment variable or pass SDK_ROOT=path/to/sdk)
+endif
 PROJ_DIR := ../../..
 
 $(OUTPUT_DIRECTORY)/nrf52832_xxaa.out: \
