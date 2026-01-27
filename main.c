@@ -2,6 +2,7 @@
 #include <string.h>
 #include "ble_advdata.h"
 #include "ble_gatts.h"
+#include "ble_hci.h"
 #include "nordic_common.h"
 #include "softdevice_handler.h"
 #include "bsp.h"
@@ -62,6 +63,7 @@ static bool                 m_google_key_ready = false;
 // Which key is currently being advertised (0 = apple, 1 = google)
 static uint8_t              m_current_key = 0;
 static bool                 m_beacon_mode = false;
+static bool                 m_keys_ready = false;  // Set when both keys received, triggers beacon after disconnect
 
 void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name)
 {
@@ -139,6 +141,17 @@ static void start_beacon_mode(void)
 
     NRF_LOG_INFO("Starting beacon mode\r\n");
 
+    // Get and print MAC address
+    ble_gap_addr_t addr;
+#if (NRF_SD_BLE_API_VERSION >= 3)
+    sd_ble_gap_addr_get(&addr);
+#else
+    sd_ble_gap_address_get(&addr);
+#endif
+    NRF_LOG_INFO("MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+        addr.addr[5], addr.addr[4], addr.addr[3],
+        addr.addr[2], addr.addr[1], addr.addr[0]);
+
     // Start the key switch timer
     uint32_t err_code = app_timer_start(m_key_switch_timer, KEY_SWITCH_INTERVAL, NULL);
     APP_ERROR_CHECK(err_code);
@@ -162,7 +175,7 @@ static void on_write(ble_evt_t * p_ble_evt)
             len = APPLE_KEY_LENGTH - m_apple_key_offset;
         }
 
-        // Copy data to apple_key at current offset
+        // Copy data to apple_key at the current offset
         memcpy(&apple_key[m_apple_key_offset], p_evt_write->data, len);
         m_apple_key_offset += len;
 
@@ -181,10 +194,12 @@ static void on_write(ble_evt_t * p_ble_evt)
             m_apple_key_ready = true;
             m_apple_key_offset = 0;
 
-            // Start beacon mode if both keys are ready
-            if (m_apple_key_ready && m_google_key_ready)
+            // If both keys ready, disconnect to start beacon mode
+            if (m_google_key_ready && !m_keys_ready)
             {
-                start_beacon_mode();
+                m_keys_ready = true;
+                NRF_LOG_INFO("Both keys received, disconnecting...\r\n");
+                sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
             }
         }
     }
@@ -208,10 +223,12 @@ static void on_write(ble_evt_t * p_ble_evt)
 
         m_google_key_ready = true;
 
-        // Start beacon mode if both keys are ready
-        if (m_apple_key_ready && m_google_key_ready)
+        // If both keys ready, disconnect to start beacon mode
+        if (m_apple_key_ready && m_google_key_ready && !m_keys_ready)
         {
-            start_beacon_mode();
+            m_keys_ready = true;
+            NRF_LOG_INFO("Both keys received, disconnecting...\r\n");
+            sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
         }
     }
 }
@@ -228,8 +245,16 @@ static void ble_evt_handler(ble_evt_t * p_ble_evt)
         case BLE_GAP_EVT_DISCONNECTED:
             NRF_LOG_INFO("Disconnected\r\n");
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
-            // Restart advertising
-            sd_ble_gap_adv_start(&m_adv_params);
+
+            // Start beacon mode if keys are ready, otherwise restart connectable advertising
+            if (m_keys_ready)
+            {
+                start_beacon_mode();
+            }
+            else
+            {
+                sd_ble_gap_adv_start(&m_adv_params);
+            }
             break;
 
         case BLE_GATTS_EVT_WRITE:
