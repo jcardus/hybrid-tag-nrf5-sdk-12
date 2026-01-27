@@ -34,6 +34,15 @@
 #define APPLE_KEY_LENGTH         28
 #define GOOGLE_KEY_LENGTH        20
 
+// Manufacturer IDs
+#define APPLE_COMPANY_ID         0x004C
+#define GOOGLE_COMPANY_ID        0x00E0
+
+// Timer for switching between keys
+#define KEY_SWITCH_INTERVAL      APP_TIMER_TICKS(2000, APP_TIMER_PRESCALER)  // 2 seconds
+
+APP_TIMER_DEF(m_key_switch_timer);
+
 static ble_gap_adv_params_t m_adv_params;
 static uint16_t             m_conn_handle = BLE_CONN_HANDLE_INVALID;
 static uint16_t             m_service_handle;
@@ -44,13 +53,98 @@ static uint8_t              m_custom_uuid_type;
 // Apple key storage - receives 28 bytes in two writes (20 + 8)
 static uint8_t              apple_key[APPLE_KEY_LENGTH];
 static uint8_t              m_apple_key_offset = 0;
+static bool                 m_apple_key_ready = false;
 
 // Google key storage - receives 20 bytes in one write operation
 static uint8_t              google_key[GOOGLE_KEY_LENGTH];
+static bool                 m_google_key_ready = false;
+
+// Which key is currently being advertised (0 = apple, 1 = google)
+static uint8_t              m_current_key = 0;
+static bool                 m_beacon_mode = false;
 
 void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name)
 {
     app_error_handler(DEAD_BEEF, line_num, p_file_name);
+}
+
+static void start_beacon_advertising(void);
+
+static void key_switch_timer_handler(void * p_context)
+{
+    (void)p_context;
+
+    // Toggle between apple and google key
+    m_current_key = (m_current_key + 1) % 2;
+
+    // Update advertising with the new key
+    start_beacon_advertising();
+}
+
+static void start_beacon_advertising(void)
+{
+    // Stop current advertising
+    sd_ble_gap_adv_stop();
+
+    // Build raw advertising data (max 31 bytes)
+    // Format: [length][AD type 0xFF][company ID low][company ID high][data...]
+    uint8_t adv_data[31];
+    uint8_t adv_len = 0;
+
+    if (m_current_key == 0)
+    {
+        // Apple key: last 22 bytes + 2 company ID + 1 AD type = 25 bytes
+        adv_data[adv_len++] = 22 + 3;                // Length: data + company ID + AD type
+        adv_data[adv_len++] = 0xFF;                  // AD type: Manufacturer Specific
+        adv_data[adv_len++] = APPLE_COMPANY_ID & 0xFF;
+        adv_data[adv_len++] = (APPLE_COMPANY_ID >> 8) & 0xFF;
+        memcpy(&adv_data[adv_len], &apple_key[6], 22);  // Last 22 bytes (skip first 6)
+        adv_len += 22;
+        NRF_LOG_INFO("Advertising Apple key\r\n");
+    }
+    else
+    {
+        // Google key: 20 bytes + 2 company ID + 1 AD type = 23 bytes
+        adv_data[adv_len++] = GOOGLE_KEY_LENGTH + 3;
+        adv_data[adv_len++] = 0xFF;
+        adv_data[adv_len++] = GOOGLE_COMPANY_ID & 0xFF;
+        adv_data[adv_len++] = (GOOGLE_COMPANY_ID >> 8) & 0xFF;
+        memcpy(&adv_data[adv_len], google_key, GOOGLE_KEY_LENGTH);
+        adv_len += GOOGLE_KEY_LENGTH;
+        NRF_LOG_INFO("Advertising Google key\r\n");
+    }
+
+    // Set raw advertising data
+    uint32_t err_code = sd_ble_gap_adv_data_set(adv_data, adv_len, NULL, 0);
+    APP_ERROR_CHECK(err_code);
+
+    // Use non-connectable advertising for beacon mode
+    memset(&m_adv_params, 0, sizeof(m_adv_params));
+    m_adv_params.type        = BLE_GAP_ADV_TYPE_ADV_NONCONN_IND;
+    m_adv_params.p_peer_addr = NULL;
+    m_adv_params.fp          = BLE_GAP_ADV_FP_ANY;
+    m_adv_params.interval    = APP_ADV_INTERVAL;
+    m_adv_params.timeout     = 0;
+
+    err_code = sd_ble_gap_adv_start(&m_adv_params);
+    APP_ERROR_CHECK(err_code);
+}
+
+static void start_beacon_mode(void)
+{
+    if (m_beacon_mode) return;
+
+    m_beacon_mode = true;
+    m_current_key = 0;
+
+    NRF_LOG_INFO("Starting beacon mode\r\n");
+
+    // Start the key switch timer
+    uint32_t err_code = app_timer_start(m_key_switch_timer, KEY_SWITCH_INTERVAL, NULL);
+    APP_ERROR_CHECK(err_code);
+
+    // Start advertising the first key
+    start_beacon_advertising();
 }
 
 static void on_write(ble_evt_t * p_ble_evt)
@@ -84,8 +178,14 @@ static void on_write(ble_evt_t * p_ble_evt)
             }
             NRF_LOG_RAW_INFO("\r\n");
 
-            // Reset offset for next key
+            m_apple_key_ready = true;
             m_apple_key_offset = 0;
+
+            // Start beacon mode if both keys are ready
+            if (m_apple_key_ready && m_google_key_ready)
+            {
+                start_beacon_mode();
+            }
         }
     }
     // Handle Google key writes (20 bytes in one write)
@@ -105,6 +205,14 @@ static void on_write(ble_evt_t * p_ble_evt)
             NRF_LOG_RAW_INFO("%02X ", google_key[i]);
         }
         NRF_LOG_RAW_INFO("\r\n");
+
+        m_google_key_ready = true;
+
+        // Start beacon mode if both keys are ready
+        if (m_apple_key_ready && m_google_key_ready)
+        {
+            start_beacon_mode();
+        }
     }
 }
 
@@ -329,12 +437,17 @@ int main(void)
     err_code = bsp_init(BSP_INIT_LED, APP_TIMER_TICKS(100, APP_TIMER_PRESCALER), NULL);
     APP_ERROR_CHECK(err_code);
 
+    // Create timer for key switching
+    err_code = app_timer_create(&m_key_switch_timer, APP_TIMER_MODE_REPEATED, key_switch_timer_handler);
+    APP_ERROR_CHECK(err_code);
+
     ble_stack_init();
     gap_params_init();
     services_init();
     advertising_init();
 
     NRF_LOG_INFO("BLE GATT Service started\r\n");
+    NRF_LOG_INFO("Waiting for keys...\r\n");
 
     advertising_start();
 
