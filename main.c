@@ -76,7 +76,7 @@ static void key_switch_timer_handler(void * p_context)
 {
     (void)p_context;
 
-    // Toggle between apple and google key
+    // Toggle between an apple and Google key
     m_current_key = (m_current_key + 1) % 2;
 
     // Update advertising with the new key
@@ -136,14 +136,24 @@ static void start_beacon_advertising(void)
     }
     else
     {
-        // Google key: 20 bytes + 2 company ID + 1 AD type = 23 bytes
-        adv_data[adv_len++] = GOOGLE_KEY_LENGTH + 3;
-        adv_data[adv_len++] = 0xFF;
-        adv_data[adv_len++] = GOOGLE_COMPANY_ID & 0xFF;
-        adv_data[adv_len++] = (GOOGLE_COMPANY_ID >> 8) & 0xFF;
-        memcpy(&adv_data[adv_len], google_key, GOOGLE_KEY_LENGTH);
+        // Google FMDN format using Eddystone Service Data
+        // Flags AD structure
+        adv_data[adv_len++] = 0x02;        // Length
+        adv_data[adv_len++] = 0x01;        // AD type: Flags
+        adv_data[adv_len++] = 0x06;        // LE General Discoverable | BR/EDR Not Supported
+
+        // Service Data AD structure
+        // Length = 1 (type) + 2 (UUID) + 1 (frame) + 20 (EID) + 1 (flags) = 25
+        adv_data[adv_len++] = 0x19;        // Length (25)
+        adv_data[adv_len++] = 0x16;        // AD type: Service Data - 16-bit UUID
+        adv_data[adv_len++] = 0xAA;        // Eddystone UUID low byte
+        adv_data[adv_len++] = 0xFE;        // Eddystone UUID high byte
+        adv_data[adv_len++] = 0x40;        // Frame type: FMDN
+        memcpy(&adv_data[adv_len], google_key, GOOGLE_KEY_LENGTH);  // 20-byte EID
         adv_len += GOOGLE_KEY_LENGTH;
-        NRF_LOG_INFO("Advertising Google key\r\n");
+        adv_data[adv_len++] = 0x00;        // Hashed flags
+
+        NRF_LOG_INFO("Advertising Google FMDN key\r\n");
     }
 
     // Set raw advertising data
@@ -492,7 +502,7 @@ int main(void)
     err_code = bsp_init(BSP_INIT_LED, APP_TIMER_TICKS(100, APP_TIMER_PRESCALER), NULL);
     APP_ERROR_CHECK(err_code);
 
-    // Create timer for key switching
+    // Create a timer for key switching
     err_code = app_timer_create(&m_key_switch_timer, APP_TIMER_MODE_REPEATED, key_switch_timer_handler);
     APP_ERROR_CHECK(err_code);
 
