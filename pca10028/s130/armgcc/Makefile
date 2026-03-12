@@ -145,6 +145,16 @@ INC_FOLDERS += \
 # Libraries common to all targets
 LIB_FILES += \
 
+# Optional compile-time Apple key (28 bytes as comma-separated hex, e.g. make APPLE_KEY="0x01,0x02,...")
+ifdef APPLE_KEY
+CFLAGS += -DAPPLE_KEY_BYTES=$(APPLE_KEY)
+endif
+
+# Optional compile-time Google key (20 bytes as comma-separated hex, e.g. make GOOGLE_KEY="0x01,0x02,...")
+ifdef GOOGLE_KEY
+CFLAGS += -DGOOGLE_KEY_BYTES=$(GOOGLE_KEY)
+endif
+
 # C flags common to all targets
 CFLAGS += -DBOARD_PCA10028
 CFLAGS += -DSOFTDEVICE_PRESENT

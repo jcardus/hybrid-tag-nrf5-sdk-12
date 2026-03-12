@@ -431,12 +431,7 @@ static void advertising_init(void)
     m_adv_params.timeout     = APP_ADV_TIMEOUT;
 }
 
-static void advertising_start(void)
-{
-    uint32_t err_code = sd_ble_gap_adv_start(&m_adv_params);
-    APP_ERROR_CHECK(err_code);
-    NRF_LOG_INFO("Advertising started\r\n");
-}
+
 
 static void gap_params_init(void)
 {
@@ -538,10 +533,22 @@ int main(void)
 
     get_battery_voltage_mv();
 
+#if defined(APPLE_KEY_BYTES) && defined(GOOGLE_KEY_BYTES)
+    NRF_LOG_INFO("Apple key:\r\n");
+    for (int i = 0; i < APPLE_KEY_LENGTH; i++) { NRF_LOG_RAW_INFO("%02X ", apple_key[i]); }
+    NRF_LOG_RAW_INFO("\r\n");
+    NRF_LOG_INFO("Google key:\r\n");
+    for (int i = 0; i < GOOGLE_KEY_LENGTH; i++) { NRF_LOG_RAW_INFO("%02X ", google_key[i]); }
+    NRF_LOG_RAW_INFO("\r\n");
+    m_keys_ready = true;
+    NRF_LOG_INFO("Keys compiled in, starting beacon mode\r\n");
+    start_beacon_mode();
+#else
     NRF_LOG_INFO("BLE GATT Service started\r\n");
     NRF_LOG_INFO("Waiting for keys...\r\n");
 
-    advertising_start();
+
+#endif
 
     for (;;)
     {
